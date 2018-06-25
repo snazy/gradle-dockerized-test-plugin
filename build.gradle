@@ -4,17 +4,29 @@ plugins {
 }
 
 group = 'com.pedjak.gradle.plugins'
-version = '0.5.6'
+version = '0.5.7'
 
 apply plugin: 'groovy'
 apply plugin: 'java-gradle-plugin'
 apply plugin: 'idea'
 
+ext {
+    nettyVersion = '4.1.27.Final'
+}
+
 dependencies {
     compile gradleApi()
     compile 'org.apache.commons:commons-lang3:3.3.2'
     compile 'org.apache.maven:maven-artifact:3.3.3'
-    compile 'com.github.docker-java:docker-java:3.0.13'
+
+    // Use latest version of docker-java and explicitly use the most recent version of Netty (docker-java uses an
+    // old netty version)
+    compile 'com.github.docker-java:docker-java:3.0.14'
+    compile "io.netty:netty-codec-http:${nettyVersion}"
+    compile "io.netty:netty-handler:${nettyVersion}"
+    compile "io.netty:netty-handler-proxy:${nettyVersion}"
+    compile "io.netty:netty-transport-native-epoll:${nettyVersion}"
+    compile "io.netty:netty-transport-native-kqueue:${nettyVersion}"
 
     testCompile ("org.spockframework:spock-core:1.0-groovy-2.4") {
         exclude module: "groovy-all"

@@ -18,6 +18,12 @@ Requirements
 * [Docker](http://www.docker.com)
 * this plugin
 
+Compatibility
+=============
+
+* Gradle 4.8.1 is the minimum requirement for dockerized-test v0.5.7
+* Gradle 4.2 is the minimum requirement for dockerized-test v0.5.6
+
 Usage
 =====
 
@@ -28,7 +34,7 @@ Usage
             maven { url = "http://dl.bintray.com/pedjak/gradle-plugins"}
         }
         dependencies {
-            classpath "com.pedjak.gradle.plugins:dockerized-test:0.5"
+            classpath "com.pedjak.gradle.plugins:dockerized-test:0.5.7"
         }
     }
     

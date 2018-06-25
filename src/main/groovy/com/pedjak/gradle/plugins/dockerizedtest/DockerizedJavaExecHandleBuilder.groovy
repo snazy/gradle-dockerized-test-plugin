@@ -17,9 +17,10 @@
 package com.pedjak.gradle.plugins.dockerizedtest
 
 import org.gradle.api.internal.file.FileResolver
+import org.gradle.initialization.BuildCancellationToken
 import org.gradle.process.internal.*
-import org.gradle.process.internal.streams.StreamsForwarder
-import org.gradle.process.internal.streams.StreamsHandler
+
+import java.util.concurrent.Executor
 
 class DockerizedJavaExecHandleBuilder extends JavaExecHandleBuilder {
 
@@ -28,8 +29,8 @@ class DockerizedJavaExecHandleBuilder extends JavaExecHandleBuilder {
 
     private final WorkerSemaphore workersSemaphore
 
-    DockerizedJavaExecHandleBuilder(DockerizedTestExtension extension, FileResolver fileResolver, WorkerSemaphore workersSemaphore) {
-        super(fileResolver)
+    DockerizedJavaExecHandleBuilder(DockerizedTestExtension extension, FileResolver fileResolver, Executor executor, BuildCancellationToken buildCancellationToken, WorkerSemaphore workersSemaphore) {
+        super(fileResolver, executor, buildCancellationToken)
         this.extension = extension
         this.workersSemaphore = workersSemaphore
     }
@@ -40,7 +41,7 @@ class DockerizedJavaExecHandleBuilder extends JavaExecHandleBuilder {
             effectiveHandler = this.streamsHandler;
         } else {
             boolean shouldReadErrorStream = !redirectErrorStream;
-            effectiveHandler = new StreamsForwarder(standardOutput, errorOutput, standardInput, shouldReadErrorStream);
+            effectiveHandler = new AllStreamsForwarder(standardOutput, errorOutput, standardInput, shouldReadErrorStream)
         }
         return effectiveHandler;
     }

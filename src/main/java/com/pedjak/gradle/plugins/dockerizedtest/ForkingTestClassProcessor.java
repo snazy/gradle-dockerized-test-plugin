@@ -121,4 +121,9 @@ public class ForkingTestClassProcessor implements TestClassProcessor
             }
         }
     }
+
+    @Override
+    public void stopNow() {
+        stop(); // TODO need anything else ??
+    }
 }

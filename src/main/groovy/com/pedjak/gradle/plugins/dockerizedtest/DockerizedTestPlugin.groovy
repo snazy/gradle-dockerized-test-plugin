@@ -21,8 +21,14 @@ import com.github.dockerjava.core.DefaultDockerClientConfig
 import com.github.dockerjava.core.DockerClientBuilder
 import com.github.dockerjava.netty.NettyDockerCmdExecFactory
 import org.gradle.api.*
+import org.gradle.initialization.BuildCancellationToken
+import org.gradle.initialization.DefaultBuildCancellationToken
+import org.gradle.internal.concurrent.DefaultExecutorFactory
 import org.gradle.internal.concurrent.ExecutorFactory
 import org.gradle.api.tasks.testing.Test
+import org.gradle.internal.concurrent.ManagedExecutor
+import org.gradle.internal.jvm.JavaInfo
+import org.gradle.internal.jvm.inspection.JvmVersionDetector
 import org.gradle.internal.operations.BuildOperationExecutor;
 import org.gradle.internal.remote.Address
 import org.gradle.internal.remote.ConnectionAcceptor
@@ -42,7 +48,7 @@ import javax.inject.Inject
 
 class DockerizedTestPlugin implements Plugin<Project> {
 
-    def supportedVersion = '4.2'
+    def supportedVersion = '4.8.1'
     def currentUser
     def messagingServer
     def static workerSemaphore = new DefaultWorkerSemaphore()
@@ -71,16 +77,16 @@ class DockerizedTestPlugin implements Plugin<Project> {
 
                 if (!extension.client)
                 {
-                    extension.client = createDefaultClient()
+                    extension.client = createDefaultClient(extension)
                 }
             }
 
         }
     }
 
-    DockerClient createDefaultClient() {
+    DockerClient createDefaultClient(DockerizedTestExtension extension) {
         DockerClientBuilder.getInstance(DefaultDockerClientConfig.createDefaultConfigBuilder())
-                    .withDockerCmdExecFactory(new NettyDockerCmdExecFactory())
+                    .withDockerCmdExecFactory(new NettyDockerCmdExecFactory().withConnectTimeout(extension.connectTimeout))
                     .build()
     }
 
@@ -97,7 +103,17 @@ class DockerizedTestPlugin implements Plugin<Project> {
 
     def newProcessBuilderFactory(project, extension, defaultProcessBuilderFactory) {
 
-        def execHandleFactory = [newJavaExec: { -> new DockerizedJavaExecHandleBuilder(extension, project.fileResolver, workerSemaphore)}] as JavaExecHandleFactory
+        // this stuff is defined in org.gradle.process.internal.DefaultExecActionFactory, but that's internal :(
+        DefaultExecutorFactory executorFactory = new DefaultExecutorFactory()
+        ManagedExecutor executor = executorFactory.create("Docker exec process")
+        BuildCancellationToken buildCancellationToken = new DefaultBuildCancellationToken()
+
+        def execHandleFactory = [newJavaExec: { -> new DockerizedJavaExecHandleBuilder(extension, project.fileResolver, executor, buildCancellationToken, workerSemaphore)}] as JavaExecHandleFactory
+
+        def jvmVerDetector = defaultProcessBuilderFactory.workerImplementationFactory.jvmVersionDetector
+        if (extension?.javaVersion)
+            jvmVerDetector = new FixedJvmVersionDetector(extension.javaVersion)
+
         new DefaultWorkerProcessFactory(defaultProcessBuilderFactory.loggingManager,
                                         messagingServer,
                                         defaultProcessBuilderFactory.workerImplementationFactory.classPathRegistry,
@@ -105,10 +121,34 @@ class DockerizedTestPlugin implements Plugin<Project> {
                                         defaultProcessBuilderFactory.gradleUserHomeDir,
                                         defaultProcessBuilderFactory.workerImplementationFactory.temporaryFileProvider,
                                         execHandleFactory,
-                                        defaultProcessBuilderFactory.workerImplementationFactory.jvmVersionDetector,
+                                        jvmVerDetector,
                                         defaultProcessBuilderFactory.outputEventListener,
                                         memoryManager
                                         )
+    }
+
+    /**
+     * We need to tell Gradle which Java version the Docker container is running. If we run the "master" Gradle
+     * process with Java 8 but run the Docker containers with Java 11, the built-in detection logic will assume
+     * that the Docker containers use Java 8 as well and
+     * {@link org.gradle.process.internal.worker.child.BootstrapSecurityManager} will error out (ClassCastException).
+     */
+    class FixedJvmVersionDetector implements JvmVersionDetector {
+        private final JavaVersion javaVersion
+
+        FixedJvmVersionDetector(JavaVersion javaVersion) {
+            this.javaVersion = javaVersion
+        }
+
+        @Override
+        JavaVersion getJavaVersion(JavaInfo javaInfo) {
+            return javaVersion
+        }
+
+        @Override
+        JavaVersion getJavaVersion(String javaCommand) {
+            return javaVersion
+        }
     }
 
     class MessageServer implements MessagingServer {

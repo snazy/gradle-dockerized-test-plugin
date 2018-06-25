@@ -16,20 +16,43 @@
 
 package com.pedjak.gradle.plugins.dockerizedtest
 
+import org.gradle.api.JavaVersion
+
 class DockerizedTestExtension {
 
     String image
     Map volumes
     String user
+    JavaVersion javaVersion
+    Integer connectTimeout
 
+    /**
+     * @param CreateContainerCmd createCmd
+     * @param DockerClient client
+     */
     Closure beforeContainerCreate
 
+    /**
+     * @param String containerId
+     * @param DockerClient client
+     */
     Closure afterContainerCreate
 
+    /**
+     * @param String containerId
+     * @param DockerClient client
+     */
     Closure beforeContainerStart
 
+    /**
+     * @param String containerId
+     * @param DockerClient client
+     */
     Closure afterContainerStart
 
+    /**
+     * (no params)
+     */
     Closure afterContainerStop = { containerId, client ->
         try
         {

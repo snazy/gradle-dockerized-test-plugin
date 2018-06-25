@@ -30,12 +30,10 @@ import org.gradle.internal.UncheckedException;
 import org.gradle.internal.concurrent.DefaultExecutorFactory;
 import org.gradle.internal.concurrent.ManagedExecutor;
 import org.gradle.internal.event.ListenerBroadcast;
-import org.gradle.internal.nativeintegration.services.NativeServices;
-import org.gradle.internal.operations.BuildOperationIdentifierPreservingRunnable;
+import org.gradle.internal.operations.CurrentBuildOperationPreservingRunnable;
 import org.gradle.process.ExecResult;
 import org.gradle.process.internal.*;
 import org.gradle.process.internal.shutdown.ShutdownHookActionRegister;
-import org.gradle.process.internal.streams.StreamsHandler;
 
 import javax.annotation.Nullable;
 import java.io.*;
@@ -252,8 +250,8 @@ public class DockerizedExecHandle implements ExecHandle, ProcessSettings
             }
             setState(ExecHandleState.STARTING);
 
-            execHandleRunner = new DockerizedExecHandleRunner(this, streamsHandler, executorFactory);
-            executor.execute(new BuildOperationIdentifierPreservingRunnable(execHandleRunner));
+            execHandleRunner = new DockerizedExecHandleRunner(this, streamsHandler, executorFactory.create(format("Forward streams with process: %s", getDisplayName())));
+            executor.execute(new CurrentBuildOperationPreservingRunnable(execHandleRunner));
 
             while (stateIn(ExecHandleState.STARTING)) {
                 LOGGER.debug("Waiting until process started: {}.", displayName);
