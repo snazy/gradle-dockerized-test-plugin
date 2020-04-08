@@ -35,7 +35,7 @@ class DockerizedTestExtension {
     Closure afterContainerStop = { containerId, client ->
         try
         {
-            client.removeContainerCmd(containerId).exec();
+            client.removeContainerCmd(containerId).exec()
         } catch (Exception e) {
             // ignore any error
         }
@@ -51,9 +51,9 @@ class DockerizedTestExtension {
     DockerClient getClient() {
         if (clientOrClosure == null) return null
         if (DockerClient.class.isAssignableFrom(clientOrClosure.getClass())) {
-            return (DockerClient) clientOrClosure;
+            return (DockerClient) clientOrClosure
         } else {
-            return (DockerClient) ((Closure) clientOrClosure).call();
+            return (DockerClient) ((Closure) clientOrClosure).call()
         }
     }
 }

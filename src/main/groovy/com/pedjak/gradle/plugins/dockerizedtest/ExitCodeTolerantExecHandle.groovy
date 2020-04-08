@@ -17,7 +17,6 @@
 package com.pedjak.gradle.plugins.dockerizedtest
 
 import org.gradle.process.ExecResult
-import org.gradle.process.internal.ExecException
 import org.gradle.process.internal.ExecHandle
 import org.gradle.process.internal.ExecHandleListener
 
@@ -70,37 +69,6 @@ class ExitCodeTolerantExecHandle implements ExecHandle {
                 }
             }
             throw e
-        }
-    }
-
-    private static class ExitCodeTolerantExecResult implements ExecResult {
-
-        @Delegate
-        private final ExecResult delegate
-
-        ExitCodeTolerantExecResult(ExecResult delegate) {
-            this.delegate = delegate
-        }
-
-        ExecResult assertNormalExitValue() throws ExecException {
-            // no op because we are perfectly ok if the exit code is anything
-            // because Docker can complain about not being able to remove the used image
-            // although the tests completed fine
-            this
-        }
-    }
-
-    private static class ExecHandleListenerFacade implements ExecHandleListener {
-
-        @Delegate
-        private final ExecHandleListener delegate
-
-        ExecHandleListenerFacade(ExecHandleListener delegate) {
-            this.delegate = delegate
-        }
-
-        void executionFinished(ExecHandle execHandle, ExecResult execResult) {
-            delegate.executionFinished(execHandle, new ExitCodeTolerantExecResult(execResult))
         }
     }
 }

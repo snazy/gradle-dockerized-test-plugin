@@ -33,7 +33,7 @@ import org.gradle.internal.event.ListenerBroadcast;
 import org.gradle.internal.operations.CurrentBuildOperationPreservingRunnable;
 import org.gradle.process.ExecResult;
 import org.gradle.process.internal.*;
-import org.gradle.process.internal.shutdown.ShutdownHookActionRegister;
+import org.gradle.process.internal.shutdown.ShutdownHooks;
 
 import javax.annotation.Nullable;
 import java.io.*;
@@ -45,6 +45,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.stream.Collectors;
 
 import static java.lang.String.format;
 
@@ -94,8 +95,8 @@ public class DockerizedExecHandle implements ExecHandle, ProcessSettings
     private final StreamsHandler outputHandler;
     private final StreamsHandler inputHandler;
     private final boolean redirectErrorStream;
-    private int timeoutMillis;
-    private boolean daemon;
+    private final int timeoutMillis;
+    private final boolean daemon;
 
     /**
      * Lock to guard all mutable state
@@ -118,11 +119,8 @@ public class DockerizedExecHandle implements ExecHandle, ProcessSettings
     private ExecResultImpl execResult;
 
     private final ListenerBroadcast<ExecHandleListener> broadcast;
-
     private final ExecHandleShutdownHookAction shutdownHookAction;
-
     private final BuildCancellationToken buildCancellationToken;
-
     private final DockerizedTestExtension testExtension;
 
     public DockerizedExecHandle(DockerizedTestExtension testExtension, String displayName, File directory, String command, List<String> arguments,
@@ -146,7 +144,7 @@ public class DockerizedExecHandle implements ExecHandle, ProcessSettings
         this.buildCancellationToken = buildCancellationToken;
         this.testExtension = testExtension;
         shutdownHookAction = new ExecHandleShutdownHookAction(this);
-        broadcast = new ListenerBroadcast<ExecHandleListener>(ExecHandleListener.class);
+        broadcast = new ListenerBroadcast<>(ExecHandleListener.class);
         broadcast.addAll(listeners);
     }
 
@@ -205,7 +203,7 @@ public class DockerizedExecHandle implements ExecHandle, ProcessSettings
     }
 
     private void setEndStateInfo(ExecHandleState newState, int exitValue, Throwable failureCause) {
-        ShutdownHookActionRegister.removeAction(shutdownHookAction);
+        ShutdownHooks.removeShutdownHook(shutdownHookAction);
         buildCancellationToken.removeCallback(shutdownHookAction);
         ExecHandleState currentState;
         lock.lock();
@@ -341,7 +339,7 @@ public class DockerizedExecHandle implements ExecHandle, ProcessSettings
     }
 
     void started() {
-        ShutdownHookActionRegister.addAction(shutdownHookAction);
+        ShutdownHooks.addShutdownHook(shutdownHookAction);
         buildCancellationToken.addCallback(shutdownHookAction);
         setState(ExecHandleState.STARTED);
         broadcast.getSource().executionStarted(this);
@@ -396,23 +394,17 @@ public class DockerizedExecHandle implements ExecHandle, ProcessSettings
                     File tar = CompressArchiveUtil.archiveTARFiles(new File("/"), Arrays.asList(optionFile), optionFile.getName());
                     for (int i = 0; i < 10; i++)
                     {
-                        FileInputStream tarInputStream = null;
-                        try
+                        try (FileInputStream tarInputStream = new FileInputStream(tar))
                         {
-                            tarInputStream = new FileInputStream(tar);
                             client.copyArchiveToContainerCmd(containerId)
                                     .withRemotePath("/")
-                                    .withTarInputStream(tarInputStream)
+                                    .withTarInputStream(new BufferedInputStream(tarInputStream))
                                     .exec();
                             copyingDone = true;
                             tar.delete();
                             break;
                         } catch (Exception e) {
                             LOGGER.warn("Failed copying option file {} via tar {} to container {}", optionFile, tar, containerId, e);
-                        } finally {
-                            if (tarInputStream != null) {
-                                tarInputStream.close();
-                            }
                         }
                     }
                     if (!copyingDone) {
@@ -427,10 +419,11 @@ public class DockerizedExecHandle implements ExecHandle, ProcessSettings
         try
         {
             DockerClient client = testExtension.getClient();
-            CreateContainerCmd createCmd = client.createContainerCmd(testExtension.getImage().toString())
+            CreateContainerCmd createCmd = client.createContainerCmd(testExtension.getImage())
                     .withTty(false)
                     .withStdinOpen(true)
                     .withStdInOnce(true)
+                    .withAttachStdin(true)
                     .withWorkingDir(directory.getAbsolutePath());
 
             createCmd.withEnv(getEnv());
@@ -444,8 +437,23 @@ public class DockerizedExecHandle implements ExecHandle, ProcessSettings
             cmdLine.addAll(arguments);
             createCmd.withCmd(cmdLine);
 
+            LOGGER.debug("Starting container image {}, user={}\n  binds:\n    {}\n  command-line:\n    {}",
+                         testExtension.getImage(),
+                         user,
+                         createCmd.getHostConfig().getBinds() != null ? Arrays.stream(createCmd.getHostConfig()
+                                                                                               .getBinds())
+                                                                              .map(b -> String.format("%s %s %s no-copy:%s",
+                                                                                                      b.getPath(),
+                                                                                                      b.getVolume().getPath(),
+                                                                                                      b.getAccessMode(),
+                                                                                                      b.getNoCopy()))
+                                                                              .collect(Collectors.joining("\n    ")) : "<none>",
+                         String.join("\n    ", cmdLine));
+
             invokeIfNotNull(testExtension.getBeforeContainerCreate(), createCmd, client);
             String containerId = createCmd.exec().getId();
+
+            LOGGER.debug("Created container with ID {}", containerId);
 
             invokeIfNotNull(testExtension.getAfterContainerCreate(), containerId, client);
 
@@ -453,6 +461,7 @@ public class DockerizedExecHandle implements ExecHandle, ProcessSettings
 
             invokeIfNotNull(testExtension.getBeforeContainerStart(), containerId, client);
             client.startContainerCmd(containerId).exec();
+
             invokeIfNotNull(testExtension.getAfterContainerStart(), containerId, client);
 
             if (!client.inspectContainerCmd(containerId).exec().getState().getRunning()) {
@@ -463,7 +472,7 @@ public class DockerizedExecHandle implements ExecHandle, ProcessSettings
 
             return proc;
         } catch (Exception e) {
-            LOGGER.error("Failed to create container " + displayName, new RuntimeException(e));
+            LOGGER.error("Failed to create container " + displayName, e);
             throw new RuntimeException(e);
         }
     }
@@ -552,6 +561,13 @@ public class DockerizedExecHandle implements ExecHandle, ProcessSettings
         }
 
         @Override
+        public void disconnect()
+        {
+            inputHandler.disconnect();
+            outputHandler.disconnect();
+        }
+
+        @Override
         public void stop() {
             inputHandler.stop();
             outputHandler.stop();
@@ -603,16 +619,20 @@ public class DockerizedExecHandle implements ExecHandle, ProcessSettings
                     stdErrWriteStream.close();
                 } catch (Exception e) {
                     LOGGER.debug("Error by detaching streams", e);
-                } finally
-                {
+                } finally {
                     try
                     {
                         invokeIfNotNull(afterContainerStop, containerId, dockerClient);
                     } catch (Exception e) {
                         LOGGER.debug("Exception thrown at invoking afterContainerStop", e);
-                    } finally
-                    {
+                    } finally {
                         finished.countDown();
+                        try {
+                            if (!dockerClient.listContainersCmd().withIdFilter(Collections.singleton(containerId)).exec().isEmpty())
+                                dockerClient.removeContainerCmd(containerId).withForce(true).withRemoveVolumes(true).exec();
+                        } catch (Exception e) {
+                            LOGGER.debug("Failed to remove container {}", containerId, e);
+                        }
                     }
 
                 }

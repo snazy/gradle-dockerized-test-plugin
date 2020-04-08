@@ -16,57 +16,81 @@
 
 package com.pedjak.gradle.plugins.dockerizedtest
 
+import org.gradle.api.Task
+import org.gradle.api.internal.file.FileCollectionFactory
 import org.gradle.api.internal.file.FileResolver
+import org.gradle.api.logging.Logger
+import org.gradle.api.logging.Logging
 import org.gradle.initialization.BuildCancellationToken
+import org.gradle.process.JavaForkOptions
 import org.gradle.process.internal.*
 import org.gradle.process.internal.streams.OutputStreamsForwarder
 
 import java.util.concurrent.Executor
 
 class DockerizedJavaExecHandleBuilder extends JavaExecHandleBuilder {
+    private static final Logger LOGGER = Logging.getLogger(DockerizedJavaExecHandleBuilder.class)
 
-    def streamsHandler
-    def executor
-    def buildCancellationToken
+    StreamsHandler streamsHandler
+    Task task
+    Executor executor
+    BuildCancellationToken buildCancellationToken
     private final DockerizedTestExtension extension
-
     private final WorkerSemaphore workersSemaphore
 
-    DockerizedJavaExecHandleBuilder(DockerizedTestExtension extension, FileResolver fileResolver, Executor executor, BuildCancellationToken buildCancellationToken, WorkerSemaphore workersSemaphore) {
-        super(fileResolver, executor, buildCancellationToken)
+    DockerizedJavaExecHandleBuilder(DockerizedTestExtension extension, FileCollectionFactory fileCollectionFactory, FileResolver fileResolver,
+                                    Executor executor, BuildCancellationToken buildCancellationToken, WorkerSemaphore workersSemaphore,
+                                    JavaForkOptions javaForkOptions, Task task) {
+        super(fileResolver, fileCollectionFactory, executor, buildCancellationToken, javaForkOptions)
         this.extension = extension
         this.executor = executor
         this.buildCancellationToken = buildCancellationToken
         this.workersSemaphore = workersSemaphore
+        this.task = task
     }
 
-    def StreamsHandler getStreamsHandler() {
-        StreamsHandler effectiveHandler;
+    StreamsHandler getStreamsHandler() {
+        StreamsHandler effectiveHandler
         if (this.streamsHandler != null) {
-            effectiveHandler = this.streamsHandler;
+            effectiveHandler = this.streamsHandler
         } else {
-            boolean shouldReadErrorStream = !redirectErrorStream;
-            effectiveHandler = new OutputStreamsForwarder(standardOutput, errorOutput, shouldReadErrorStream);
+            boolean shouldReadErrorStream = !redirectErrorStream
+            effectiveHandler = new OutputStreamsForwarder(standardOutput, errorOutput, shouldReadErrorStream)
+            this.streamsHandler = effectiveHandler
         }
-        return effectiveHandler;
+        return effectiveHandler
     }
 
     ExecHandle build() {
+        LOGGER.debug("""Creating ExecHandle for ${task.path} with
+    displayName=${displayName}
+    workingDir="${workingDir}
+    arguments=$allArguments
+    streamsHandler=${getStreamsHandler()}
+    inputHandler=${inputHandler}
+    redirectErrorStream=$redirectErrorStream,
+    timeoutMillis=$timeoutMillis
+    daemon=$daemon
+    executor=$executor
+    buildCancellationToken=$buildCancellationToken
+""")
 
-        return new ExitCodeTolerantExecHandle(new DockerizedExecHandle(extension, getDisplayName(),
-                                                                    getWorkingDir(),
-                                                                    'java',
-                                                                    allArguments,
-                                                                    getActualEnvironment(),
-                                                                    getStreamsHandler(),
-                                                                    inputHandler,
-                                                                    listeners,
-                                                                    redirectErrorStream,
-                                                                    timeoutMillis,
-                                                                    daemon,
-                                                                    executor,
-                                                                    buildCancellationToken),
-                workersSemaphore)
+        ExecHandle execHandle = new DockerizedExecHandle(extension,
+                displayName,
+                workingDir,
+                'java',
+                allArguments,
+                getActualEnvironment(),
+                getStreamsHandler(),
+                inputHandler,
+                listeners,
+                redirectErrorStream,
+                timeoutMillis,
+                daemon,
+                executor,
+                buildCancellationToken)
+
+        return new ExitCodeTolerantExecHandle(execHandle, workersSemaphore)
 
     }
 
