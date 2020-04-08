@@ -3,12 +3,16 @@ package com.pedjak.gradle.plugins.dockerizedtest;
 import java.io.File;
 import java.net.URL;
 import java.util.List;
+import java.util.stream.Collectors;
+import java.util.stream.StreamSupport;
 
 import org.gradle.api.Action;
 import org.gradle.api.internal.classpath.ModuleRegistry;
 import org.gradle.api.internal.tasks.testing.*;
 import org.gradle.api.internal.tasks.testing.worker.RemoteTestClassProcessor;
 import org.gradle.api.internal.tasks.testing.worker.TestEventSerializer;
+import org.gradle.api.logging.Logger;
+import org.gradle.api.logging.Logging;
 import org.gradle.api.tasks.testing.TestResult;
 import org.gradle.internal.remote.ObjectConnection;
 import org.gradle.process.JavaForkOptions;
@@ -19,6 +23,8 @@ import org.gradle.util.CollectionUtils;
 
 public class ForkingTestClassProcessor implements TestClassProcessor
 {
+    private static final Logger LOGGER = Logging.getLogger(ForkingTestClassProcessor.class);
+
     private final WorkerProcessFactory workerFactory;
     private final WorkerTestClassProcessorFactory processorFactory;
     private final JavaForkOptions options;
@@ -80,12 +86,19 @@ public class ForkingTestClassProcessor implements TestClassProcessor
     }
 
     RemoteTestClassProcessor forkProcess() {
+        List<URL> implementationClasspath = getTestWorkerImplementationClasspath();
+
         WorkerProcessBuilder builder = workerFactory.create(new ForciblyStoppableTestWorker(processorFactory));
         builder.setBaseName("Gradle Test Executor");
-        builder.setImplementationClasspath(getTestWorkerImplementationClasspath());
+        builder.setImplementationClasspath(implementationClasspath);
         builder.applicationClasspath(classPath);
         options.copyTo(builder.getJavaCommand());
         buildConfigAction.execute(builder);
+
+        LOGGER.debug("Forking process with implementation classpath:\n    {}\n  application classpath:\n    {}\n  additional classpath:\n    {}",
+                     implementationClasspath.stream().map(URL::toString).collect(Collectors.joining("\n    ")),
+                     StreamSupport.stream(classPath.spliterator(), false).map(File::getAbsolutePath).collect(Collectors.joining("\n    ")),
+                     moduleRegistry.getAdditionalClassPath().getAsFiles().stream().map(File::getAbsolutePath).collect(Collectors.joining("\n    ")));
 
         workerProcess = builder.build();
         workerProcess.start();
@@ -107,29 +120,31 @@ public class ForkingTestClassProcessor implements TestClassProcessor
                 moduleRegistry.getModule("gradle-messaging").getImplementationClasspath().getAsURLs(),
                 moduleRegistry.getModule("gradle-base-services").getImplementationClasspath().getAsURLs(),
                 moduleRegistry.getModule("gradle-cli").getImplementationClasspath().getAsURLs(),
+                moduleRegistry.getModule("gradle-files").getImplementationClasspath().getAsURLs(),
+                moduleRegistry.getModule("gradle-hashing").getImplementationClasspath().getAsURLs(),
                 moduleRegistry.getModule("gradle-native").getImplementationClasspath().getAsURLs(),
+                moduleRegistry.getModule("gradle-process-services").getImplementationClasspath().getAsURLs(),
                 moduleRegistry.getModule("gradle-testing-base").getImplementationClasspath().getAsURLs(),
                 moduleRegistry.getModule("gradle-testing-jvm").getImplementationClasspath().getAsURLs(),
-                moduleRegistry.getModule("gradle-process-services").getImplementationClasspath().getAsURLs(),
+                moduleRegistry.getModule("gradle-testing-junit-platform").getImplementationClasspath().getAsURLs(),
+                moduleRegistry.getModule("gradle-worker-processes").getImplementationClasspath().getAsURLs(),
+                moduleRegistry.getExternalModule("junit-platform-engine").getImplementationClasspath().getAsURLs(),
+                moduleRegistry.getExternalModule("junit-platform-launcher").getImplementationClasspath().getAsURLs(),
+                moduleRegistry.getExternalModule("junit-platform-commons").getImplementationClasspath().getAsURLs(),
                 moduleRegistry.getExternalModule("slf4j-api").getImplementationClasspath().getAsURLs(),
                 moduleRegistry.getExternalModule("jul-to-slf4j").getImplementationClasspath().getAsURLs(),
                 moduleRegistry.getExternalModule("native-platform").getImplementationClasspath().getAsURLs(),
                 moduleRegistry.getExternalModule("kryo").getImplementationClasspath().getAsURLs(),
                 moduleRegistry.getExternalModule("commons-lang").getImplementationClasspath().getAsURLs(),
                 moduleRegistry.getExternalModule("junit").getImplementationClasspath().getAsURLs(),
-                ForkingTestClassProcessor.class.getProtectionDomain().getCodeSource().getLocation()
-        );
+                ForkingTestClassProcessor.class.getProtectionDomain().getCodeSource().getLocation());
     }
 
     @Override
     public void stop() {
         if (remoteProcessor != null) {
-            try {
-                remoteProcessor.stop();
-                workerProcess.waitForStop();
-            } finally {
-                // do nothing
-            }
+            remoteProcessor.stop();
+            workerProcess.waitForStop();
         }
     }
 
